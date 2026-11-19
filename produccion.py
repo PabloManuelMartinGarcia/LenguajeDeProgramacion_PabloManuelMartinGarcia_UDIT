@@ -9,7 +9,7 @@ Uso:
     python produccion.py                       # simula una tanda de peticiones de ejemplo
     python produccion.py --interactivo         # escribes tu los datos del juego
     python produccion.py --entrada juegos.csv  # prediccion por lotes de un CSV
-    python produccion.py --evaluar             # evalua el .pkl y muestra dos graficas
+    python produccion.py --evaluar             # genera el informe HTML con todas las graficas
 
 El CSV necesita las columnas Year, Platform, Genre y Publisher (Name es opcional).
 """
@@ -303,9 +303,20 @@ def mostrar_grafica(respuestas: list[dict[str, Any]], ruta_salida: Path) -> None
 
 
 def modo_evaluacion(servicio: ServicioSuperventas, ruta_csv: Path) -> None:
-    """Carga el modelo y muestra las tasas de superventas por genero y plataforma."""
-    from plotly.subplots import make_subplots
+    """Genera un informe HTML con todas las graficas del notebook."""
+    from html import escape
+    import numpy as np
+    import plotly.express as px
     import plotly.graph_objects as go
+    from sklearn.metrics import (
+        confusion_matrix,
+        f1_score,
+        precision_score,
+        recall_score,
+        roc_auc_score,
+        roc_curve,
+    )
+    from sklearn.model_selection import train_test_split
 
     if not ruta_csv.is_file():
         raise FileNotFoundError(f"No se encontro el CSV de evaluacion: {ruta_csv}")
@@ -315,8 +326,26 @@ def modo_evaluacion(servicio: ServicioSuperventas, ruta_csv: Path) -> None:
     if faltan:
         raise ValueError(f"Faltan columnas necesarias en {ruta_csv.name}: {faltan}")
 
-    df = df.dropna(subset=["Genre", "Platform"]).copy()
+    columnas_correlacion = ["NA_Sales", "EU_Sales", "JP_Sales", "Other_Sales", "Global_Sales"]
+    faltan_correlacion = [columna for columna in columnas_correlacion if columna not in df.columns]
+    if faltan_correlacion:
+        raise ValueError(f"Faltan columnas necesarias para las graficas: {faltan_correlacion}")
+
+    df = df.copy()
     df["superventas"] = (df["Global_Sales"] >= 1).astype(int)
+    conteo_superventas = (
+        df["superventas"]
+        .map({0: "No (< 1 M)", 1: "Sí (≥ 1 M)"})
+        .value_counts()
+        .reindex(["No (< 1 M)", "Sí (≥ 1 M)"], fill_value=0)
+    )
+    por_ano = (
+        df.dropna(subset=["Year"])
+        .query("Year <= 2016")
+        .groupby("Year")
+        .agg(juegos=("Name", "size"), tasa_superventas=("superventas", "mean"))
+        .reset_index()
+    )
     por_genero = (
         df.groupby("Genre")
         .agg(juegos=("Name", "size"), tasa_superventas=("superventas", "mean"))
@@ -330,55 +359,269 @@ def modo_evaluacion(servicio: ServicioSuperventas, ruta_csv: Path) -> None:
         .sort_values("tasa_superventas")
         .reset_index()
     )
-    if por_genero.empty or por_plataforma.empty:
-        raise ValueError("No hay suficientes datos para calcular las tasas por genero y plataforma.")
+    por_editora = (
+        df.groupby("Publisher")
+        .agg(juegos=("Name", "size"), tasa_superventas=("superventas", "mean"))
+        .nlargest(15, "juegos")
+        .sort_values("tasa_superventas")
+        .reset_index()
+    )
+    if por_genero.empty or por_plataforma.empty or por_ano.empty or por_editora.empty:
+        raise ValueError("No hay suficientes datos para generar todas las graficas del informe.")
 
-    fig = make_subplots(
-        rows=1,
-        cols=2,
-        column_widths=[0.4, 0.6],
-        specs=[[{"type": "xy"}, {"type": "xy"}]],
-        subplot_titles=("Porcentaje de superventas por género", "Porcentaje de superventas por plataforma"),
+    X = df[servicio.variables]
+    y = df["superventas"]
+    _, X_test, _, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
-    for tabla, categoria, col in (
-        (por_genero, "Genre", 1),
-        (por_plataforma, "Platform", 2),
+    probabilidades = servicio.modelo.predict_proba(X_test)[:, 1]
+    predicciones = (probabilidades >= servicio.umbral).astype(int)
+    matriz_confusion = confusion_matrix(y_test, predicciones, labels=[0, 1])
+    falsos_positivos, verdaderos_positivos, _ = roc_curve(y_test, probabilidades)
+    auc = roc_auc_score(y_test, probabilidades)
+    precision = precision_score(y_test, predicciones, zero_division=0)
+    recall = recall_score(y_test, predicciones, zero_division=0)
+    f1 = f1_score(y_test, predicciones, zero_division=0)
+    cantidad_variables = len(
+        servicio.modelo.named_steps[
+            next(
+                nombre for nombre in ("preprocesador", "preprocessor")
+                if nombre in servicio.modelo.named_steps
+            )
+        ].get_feature_names_out()
+    )
+    tasa_superventas = float(y.mean())
+    nombre_modelo = type(servicio.modelo.steps[-1][1]).__name__
+    nombre_presentacion = {
+        "LogisticRegression": "Regresión logística",
+    }.get(nombre_modelo, nombre_modelo)
+
+    graficas = []
+
+    conteo_df = conteo_superventas.rename_axis("superventas").reset_index(name="juegos")
+    conteo_df["porcentaje"] = conteo_df["juegos"] / conteo_df["juegos"].sum()
+    fig = px.bar(
+        conteo_df,
+        x="superventas",
+        y="juegos",
+        color="superventas",
+        color_discrete_map={"No (< 1 M)": "#8a8f98", "Sí (≥ 1 M)": "#eb6834"},
+        text=[f"{n:,} ({p:.1%})" for n, p in zip(conteo_df["juegos"], conteo_df["porcentaje"])],
+        title="¿Cuántos juegos son superventas?",
+    )
+    fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_layout(template="plotly_white", showlegend=False, xaxis_title=None, yaxis_title="Número de juegos")
+    graficas.append(("Proporción de superventas", "Se considera superventas un juego con ventas globales iguales o superiores a un millón. La clase está desbalanceada: solo una parte de los títulos alcanza ese nivel.", fig))
+
+    fig = px.bar(por_ano, x="Year", y="juegos", title="Juegos lanzados por año", labels={"Year": "Año", "juegos": "Juegos lanzados"})
+    fig.update_traces(marker_color="#2a78d6")
+    fig.update_layout(template="plotly_white")
+    graficas.append(("Lanzamientos por año", "Muestra el número de juegos registrados para cada año. Los años posteriores a 2016 se excluyen para evitar años incompletos en este conjunto histórico.", fig))
+
+    fig = px.line(
+        por_ano,
+        x="Year",
+        y="tasa_superventas",
+        markers=True,
+        title="Porcentaje de superventas entre los juegos de cada año",
+        labels={"Year": "Año", "tasa_superventas": "% de superventas"},
+    )
+    fig.update_traces(line_color="#eb6834")
+    fig.update_layout(template="plotly_white", yaxis_tickformat=".0%")
+    graficas.append(("Tasa de superventas por año", "La línea compara la proporción de superventas anual, no el volumen absoluto de ventas.", fig))
+
+    for tabla, categoria, titulo, nombre_categoria in (
+        (por_genero, "Genre", "Porcentaje de superventas por género", "género"),
+        (por_plataforma, "Platform", "Porcentaje de superventas por plataforma", "plataforma"),
+        (por_editora, "Publisher", "Porcentaje de superventas de las 15 editoras con más juegos", "editora"),
     ):
-        fig.add_trace(
-            go.Bar(
-                x=tabla["tasa_superventas"],
-                y=tabla[categoria],
-                orientation="h",
-                marker_color="#2a78d6",
-                text=tabla["tasa_superventas"],
-                texttemplate="%{text:.1%}",
-                textposition="outside",
-                customdata=tabla[["juegos"]],
-                cliponaxis=False,
-                showlegend=False,
-                hovertemplate=(
-                    "%{y}<br>Superventas: %{x:.1%}<br>"
-                    "Juegos: %{customdata[0]:,}<extra></extra>"
-                ),
-            ),
-            row=1,
-            col=col,
+        fig = px.bar(
+            tabla,
+            x="tasa_superventas",
+            y=categoria,
+            orientation="h",
+            text="tasa_superventas",
+            custom_data=["juegos"],
+            title=titulo,
+            labels={"tasa_superventas": "% de superventas", categoria: nombre_categoria.capitalize()},
         )
-    fig.update_layout(
-        title="Porcentaje de superventas por género y plataforma",
-        template="plotly_white",
-        height=600,
-        width=1200,
-        showlegend=False,
+        fig.update_traces(
+            marker_color="#2a78d6",
+            texttemplate="%{text:.1%}",
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{y}<br>Superventas: %{x:.1%}<br>Juegos: %{customdata[0]:,}<extra></extra>",
+        )
+        fig.update_layout(template="plotly_white", xaxis_tickformat=".0%", height=560)
+        if categoria == "Platform":
+            fig.update_layout(title=f"{titulo} (plataformas con 100 juegos o más)", height=650)
+        graficas.append((titulo, f"Cada barra muestra la tasa de superventas por {nombre_categoria}; al pasar el cursor se ve el número de juegos usado para calcularla.", fig))
+
+    correlacion = df[columnas_correlacion].corr().round(2)
+    fig = px.imshow(
+        correlacion,
+        text_auto=True,
+        color_continuous_scale="Blues",
+        zmin=0,
+        zmax=1,
+        title="Correlación entre las ventas por región",
     )
-    fig.update_xaxes(title_text="% de superventas", tickformat=".0%", row=1, col=1)
-    fig.update_xaxes(title_text="% de superventas", tickformat=".0%", row=1, col=2)
-    fig.update_yaxes(title_text="Género", row=1, col=1)
-    fig.update_yaxes(title_text="Plataforma", row=1, col=2)
+    fig.update_layout(template="plotly_white", height=500)
+    graficas.append(("Correlación de ventas regionales", "Las ventas regionales están relacionadas con las ventas globales. No se usan como variables predictoras porque contienen información que solo se conoce después de vender el juego (fuga de información).", fig))
+
+    etiquetas = ["No superventas", "Superventas"]
+    fig = px.imshow(
+        matriz_confusion,
+        x=etiquetas,
+        y=etiquetas,
+        text_auto=True,
+        color_continuous_scale="Blues",
+        labels={"x": "Predicho", "y": "Real", "color": "Juegos"},
+        title="Matriz de confusión (test)",
+    )
+    fig.update_layout(template="plotly_white", height=450)
+    graficas.append(("Matriz de confusión", "Compara la clase real con la predicción. La diagonal son aciertos; las celdas fuera de ella son errores.", fig))
+
+    fig = px.area(
+        x=falsos_positivos,
+        y=verdaderos_positivos,
+        title=f"Curva ROC (AUC = {auc:.3f})",
+        labels={"x": "Tasa de falsos positivos", "y": "Tasa de verdaderos positivos (recall)"},
+    )
+    fig.update_traces(line_color="#2a78d6")
+    fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1, line={"dash": "dash", "color": "#8a8f98"})
+    fig.update_layout(template="plotly_white", height=480, width=720)
+    graficas.append(("Curva ROC", "Resume el equilibrio entre detectar superventas y producir falsas alarmas para distintos umbrales. Un AUC más próximo a 1 indica mejor capacidad de discriminación.", fig))
+
+    nombres = servicio.modelo.named_steps[
+        next(nombre for nombre in ("preprocesador", "preprocessor") if nombre in servicio.modelo.named_steps)
+    ].get_feature_names_out()
+    coeficientes = pd.Series(
+        servicio.modelo.steps[-1][1].coef_[0],
+        index=nombres,
+    )
+    coeficientes.index = (
+        coeficientes.index.str.replace("cat__", "", regex=False)
+        .str.replace("num__", "", regex=False)
+        .str.replace("_infrequent_sklearn", " (poco frecuentes)", regex=False)
+    )
+    extremos = pd.concat([coeficientes.nsmallest(10), coeficientes.nlargest(10)]).sort_values().reset_index()
+    extremos.columns = ["variable", "coeficiente"]
+    extremos["efecto"] = np.where(extremos["coeficiente"] > 0, "Aumenta la probabilidad", "Reduce la probabilidad")
+    fig = px.bar(
+        extremos,
+        x="coeficiente",
+        y="variable",
+        orientation="h",
+        color="efecto",
+        color_discrete_map={"Aumenta la probabilidad": "#2a78d6", "Reduce la probabilidad": "#eb6834"},
+        title="Variables con más influencia en la predicción",
+        labels={"coeficiente": "Coeficiente de la regresión logística", "variable": ""},
+    )
+    fig.update_layout(template="plotly_white", height=650, legend_title_text="")
+    graficas.append(("Influencia de las variables", "Se muestran los diez coeficientes más positivos y los diez más negativos. En la regresión logística, el signo indica la dirección de la asociación aprendida, no una causalidad.", fig))
+
     ruta_salida = CARPETA / "evaluacion_modelo.html"
-    fig.write_html(ruta_salida, include_plotlyjs="cdn")
+    secciones_graficas = []
+    for indice, (titulo, descripcion, figura) in enumerate(graficas):
+        grafica_html = figura.to_html(
+            full_html=False,
+            include_plotlyjs="cdn" if indice == 0 else False,
+            config={"responsive": True},
+        )
+        secciones_graficas.append(
+            f'<section class="chart-panel"><h2>{escape(titulo)}</h2>'
+            f'<p>{escape(descripcion)}</p><div class="chart">{grafica_html}</div></section>'
+        )
+    bloque_graficas = "\n".join(secciones_graficas)
+    explicacion = f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Modelo de predicción de videojuegos superventas</title>
+  <style>
+    :root {{ color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; color: #172033; background: #f3f6fb; }}
+    body {{ margin: 0; }}
+    main {{ max-width: 1280px; margin: 0 auto; padding: 38px 28px 56px; }}
+    h1 {{ margin: 0 0 12px; font-size: clamp(2rem, 4vw, 3rem); color: #12345a; }}
+    h2 {{ margin: 30px 0 10px; color: #12345a; }}
+    p {{ line-height: 1.65; }}
+    .intro {{ max-width: 920px; font-size: 1.08rem; color: #43536b; }}
+    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 14px; margin: 24px 0; }}
+    .card, .panel {{ background: white; border: 1px solid #e1e8f0; border-radius: 12px; padding: 18px 20px; box-shadow: 0 3px 12px #16324f0a; }}
+    .card strong {{ display: block; color: #12345a; font-size: 1.65rem; margin-bottom: 5px; }}
+    .card span, .muted {{ color: #63738a; }}
+    .columns {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }}
+    .panel h2 {{ margin-top: 0; }}
+    ul {{ padding-left: 21px; line-height: 1.75; }}
+    .chart {{ margin-top: 24px; background: white; border-radius: 12px; padding: 8px; border: 1px solid #e1e8f0; }}
+    footer {{ margin-top: 18px; color: #63738a; font-size: .9rem; }}
+    @media (max-width: 600px) {{ main {{ padding: 24px 14px 36px; }} }}
+  </style>
+</head>
+<body>
+<main>
+  <h1>¿Qué hace que un videojuego sea superventas?</h1>
+  <p class="intro">Este proyecto utiliza un modelo de aprendizaje automático para estimar si un videojuego alcanzará
+  al menos <strong>un millón de unidades vendidas</strong>. Las gráficas comparan la proporción de superventas
+  dentro de cada género y plataforma; no representan una garantía de éxito ni una relación causal.</p>
+
+  <section class="cards" aria-label="Resumen del conjunto de datos y el modelo">
+    <div class="card"><strong>{len(df):,}</strong><span>juegos analizados</span></div>
+    <div class="card"><strong>{tasa_superventas:.1%}</strong><span>son superventas en los datos</span></div>
+    <div class="card"><strong>{len(servicio.variables)}</strong><span>variables de entrada</span></div>
+    <div class="card"><strong>{cantidad_variables}</strong><span>características tras el preprocesamiento</span></div>
+    <div class="card"><strong>{len(X) - len(X_test):,} / {len(X_test):,}</strong><span>juegos para entrenamiento / prueba</span></div>
+    <div class="card"><strong>{servicio.umbral:.0%}</strong><span>umbral de clasificación</span></div>
+  </section>
+
+  <section class="columns">
+    <article class="panel">
+      <h2>Cómo funciona el modelo</h2>
+      <p>Se utiliza una <strong>{escape(nombre_presentacion)}</strong> dentro de un pipeline, que prepara los datos
+      y calcula la probabilidad estimada de superventas.</p>
+      <ul>
+        <li><strong>Año (Year):</strong> se completan valores ausentes con la mediana y se estandariza.</li>
+        <li><strong>Plataforma (Platform), género (Genre) y editora (Publisher):</strong> se completan ausencias con
+        la categoría más frecuente y se convierten en variables numéricas.</li>
+        <li>Las categorías con menos de 30 ejemplos se agrupan como poco frecuentes; categorías nuevas se gestionan
+        sin detener la predicción.</li>
+        <li>La etiqueta «superventas» significa ventas globales de al menos 1 millón.</li>
+      </ul>
+    </article>
+    <article class="panel">
+      <h2>Datos y evaluación</h2>
+      <ul>
+        <li>El conjunto se divide en <strong>80 % para entrenamiento y 20 % para prueba</strong>, manteniendo la
+        proporción entre clases.</li>
+        <li>La ponderación de clases ayuda a que el modelo preste atención a la clase minoritaria.</li>
+        <li><strong>AUC en prueba: {auc:.3f}</strong>. Mide la capacidad de ordenar un superventas por encima de
+        un juego que no lo es (0,5 equivale al azar; 1,0 es una separación perfecta).</li>
+        <li><strong>Recall de superventas: {recall:.1%}</strong>; identifica esta proporción de los superventas reales.</li>
+        <li><strong>Precisión de superventas: {precision:.1%}</strong>; de los juegos marcados, esta proporción sí
+        alcanza el umbral.</li>
+        <li><strong>F1 de superventas: {f1:.1%}</strong>; combina precisión y recall en una sola medida.</li>
+      </ul>
+      <p class="muted">Evaluación calculada con una partición de prueba reproducible del archivo
+      <strong>{escape(ruta_csv.name)}</strong>.</p>
+    </article>
+  </section>
+
+  <h2>Todas las visualizaciones del análisis</h2>
+  <p class="intro">Explora las gráficas interactivas del análisis exploratorio y del rendimiento del modelo.
+  En las gráficas por categoría puedes pasar el cursor sobre las barras para consultar sus valores.</p>
+  {bloque_graficas}
+  <footer>Las tasas describen este conjunto de datos histórico y no deben interpretarse como una predicción causal
+  ni como una garantía de ventas futuras.</footer>
+</main>
+</body>
+</html>"""
+    ruta_salida.write_text(explicacion, encoding="utf-8")
     print(f"Graficas guardadas en: {ruta_salida}")
-    fig.show()
+    import webbrowser
+
+    webbrowser.open(ruta_salida.resolve().as_uri())
 
 
 def main() -> None:
@@ -386,7 +629,7 @@ def main() -> None:
     grupo = parser.add_mutually_exclusive_group()
     grupo.add_argument("--interactivo", action="store_true", help="Introducir los datos por teclado")
     grupo.add_argument("--entrada", type=Path, help="CSV con los juegos a predecir")
-    grupo.add_argument("--evaluar", action="store_true", help="Cargar el .pkl y mostrar las dos primeras graficas del EDA")
+    grupo.add_argument("--evaluar", action="store_true", help="Generar un informe HTML con todas las graficas del notebook")
     parser.add_argument("--modelo", type=Path, default=RUTA_MODELO, help="Ruta del .pkl")
     parser.add_argument("--graficas", action="store_true", help="Mostrar dos graficas de las predicciones")
     args = parser.parse_args()
