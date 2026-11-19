@@ -1,0 +1,48 @@
+2026-11-19 18:41:36 | WARNING | Modelo entrenado con scikit-learn 1.9.1 y ejecutado con 1.7.2: podria haber diferencias.
+2026-11-19 18:41:36 | INFO    | Servicio arrancado en 2680 ms · modelo del 2026-11-18T13:03:06 · metricas en test: {'recall': 0.726, 'precision': 0.275, 'auc': 0.808}
+2026-11-19 18:42:47 | INFO    | Servicio arrancado en 28334 ms · modelo del 2026-11-18T13:03:06 · metricas en test: {'recall': 0.726, 'precision': 0.275, 'auc': 0.808}
+2026-11-19 18:42:47 | INFO    | Servicio arrancado en 33868 ms · modelo del 2026-11-18T13:03:06 · metricas en test: {'recall': 0.726, 'precision': 0.275, 'auc': 0.808}
+2026-11-19 18:42:47 | INFO    | 'Shooter de Activision' → Superventas (79 %) en 36.0 ms
+2026-11-19 18:42:47 | INFO    | 'Shooter de Activision' → Superventas (79 %) en 38.3 ms
+2026-11-19 18:42:48 | INFO    | 'Plataformas de Nintendo' → Superventas (74 %) en 6.7 ms
+2026-11-19 18:42:48 | INFO    | 'Plataformas de Nintendo' → Superventas (74 %) en 6.8 ms
+2026-11-19 18:42:48 | INFO    | 'Deportes de EA' → Superventas (65 %) en 5.7 ms
+2026-11-19 18:42:48 | INFO    | 'Deportes de EA' → Superventas (65 %) en 13.0 ms
+2026-11-19 18:42:48 | WARNING | 'Aventura indie': Publisher='Estudio Indie' no aparece en los datos de entrenamiento (se trata como categoria poco frecuente)
+2026-11-19 18:42:48 | INFO    | 'Aventura indie' → No superventas (2 %) en 8.1 ms
+2026-11-19 18:42:48 | WARNING | 'Aventura indie': Publisher='Estudio Indie' no aparece en los datos de entrenamiento (se trata como categoria poco frecuente)
+2026-11-19 18:42:48 | INFO    | 'Aventura indie' → No superventas (2 %) en 9.0 ms
+2026-11-19 18:42:48 | ERROR   | 'Peticion con error' rechazada: Year=1850 fuera del rango permitido (1970-2035)
+2026-11-19 18:42:49 | ERROR   | 'Peticion con error' rechazada: Year=1850 fuera del rango permitido (1970-2035)
+2026-11-19 18:42:49 | INFO    | Servicio detenido.
+2026-11-19 18:42:49 | INFO    | Servicio detenido.
+2026-11-19 18:44:14 | INFO    | Servicio arrancado en 115 ms · modelo del 2026-11-18T13:03:06 · metricas en test: {'recall': 0.726, 'precision': 0.275, 'auc': 0.808}
+2026-11-19 18:44:14 | INFO    | 'Shooter de Activision' → Superventas (79 %) en 53.8 ms
+2026-11-19 18:44:15 | INFO    | 'Plataformas de Nintendo' → Superventas (74 %) en 5.5 ms
+2026-11-19 18:44:15 | INFO    | 'Deportes de EA' → Superventas (65 %) en 6.3 ms
+2026-11-19 18:44:15 | WARNING | 'Aventura indie': Publisher='Estudio Indie' no aparece en los datos de entrenamiento (se trata como categoria poco frecuente)
+2026-11-19 18:44:15 | INFO    | 'Aventura indie' → No superventas (2 %) en 6.5 ms
+2026-11-19 18:44:15 | ERROR   | 'Peticion con error' rechazada: Year=1850 fuera del rango permitido (1970-2035)
+2026-11-19 18:44:17 | INFO    | Servicio detenido.
+2026-11-19 18:45:28 | INFO    | Servicio arrancado en 107 ms · modelo del 2026-11-18T13:03:06 · metricas en test: {'recall': 0.726, 'precision': 0.275, 'auc': 0.808}
+2026-11-19 18:45:28 | INFO    | 'Shooter de Activision' → Superventas (79 %) en 31.5 ms
+2026-11-19 18:45:29 | INFO    | 'Plataformas de Nintendo' → Superventas (74 %) en 6.1 ms
+2026-11-19 18:45:29 | INFO    | 'Deportes de EA' → Superventas (65 %) en 5.4 ms
+2026-11-19 18:45:29 | WARNING | 'Aventura indie': Publisher='Estudio Indie' no aparece en los datos de entrenamiento (se trata como categoria poco frecuente)
+2026-11-19 18:45:29 | INFO    | 'Aventura indie' → No superventas (2 %) en 5.6 ms
+2026-11-19 18:45:30 | ERROR   | 'Peticion con error' rechazada: Year=1850 fuera del rango permitido (1970-2035)
+2026-11-19 18:45:31 | INFO    | Servicio detenido.
+2026-11-19 18:49:02 | INFO    | Servicio arrancado en 117 ms · modelo del desconocida · metricas en test: {}
+2026-11-19 18:49:03 | INFO    | Servicio detenido.
+2026-11-19 18:49:13 | INFO    | Servicio arrancado en 112 ms · modelo del desconocida · metricas en test: {}
+2026-11-19 18:49:13 | INFO    | 'Shooter de Activision' → Superventas (79 %) en 29.1 ms
+2026-11-19 18:49:13 | INFO    | 'Plataformas de Nintendo' → Superventas (74 %) en 5.1 ms
+2026-11-19 18:49:14 | INFO    | 'Deportes de EA' → Superventas (65 %) en 7.6 ms
+2026-11-19 18:49:14 | WARNING | 'Aventura indie': Publisher='Estudio Indie' no aparece en los datos de entrenamiento (se trata como categoria poco frecuente)
+2026-11-19 18:49:14 | INFO    | 'Aventura indie' → No superventas (2 %) en 4.6 ms
+2026-11-19 18:49:14 | ERROR   | 'Peticion con error' rechazada: Year=1850 fuera del rango permitido (1970-2035)
+2026-11-19 18:49:15 | INFO    | Servicio detenido.
+2026-11-19 18:50:33 | INFO    | Servicio arrancado en 91 ms · modelo del desconocida · metricas en test: {}
+2026-11-19 18:50:33 | INFO    | Servicio detenido.
+2026-11-19 18:51:24 | INFO    | Servicio arrancado en 90 ms · modelo del desconocida · metricas en test: {}
+2026-11-19 18:51:25 | INFO    | Servicio detenido.

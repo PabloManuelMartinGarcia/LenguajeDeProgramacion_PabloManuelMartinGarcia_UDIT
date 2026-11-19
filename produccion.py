@@ -9,6 +9,7 @@ Uso:
     python produccion.py                       # simula una tanda de peticiones de ejemplo
     python produccion.py --interactivo         # escribes tu los datos del juego
     python produccion.py --entrada juegos.csv  # prediccion por lotes de un CSV
+    python produccion.py --evaluar             # evalua el .pkl y muestra dos graficas
 
 El CSV necesita las columnas Year, Platform, Genre y Publisher (Name es opcional).
 """
@@ -79,25 +80,42 @@ class ServicioSuperventas:
         with open(ruta_modelo, "rb") as archivo:
             artefacto = pickle.load(archivo)  # solo cargar .pkl propios: pickle puede ejecutar codigo
 
-        self.modelo = artefacto["modelo"]
-        self.variables: list[str] = artefacto["variables"]
-        self.umbral: float = artefacto["umbral"]
+        if isinstance(artefacto, dict):
+            self.modelo = artefacto["modelo"]
+            self.variables: list[str] = artefacto["variables"]
+            self.umbral: float = artefacto["umbral"]
+            version_entrenamiento = artefacto.get("sklearn_version")
+            fecha_entrenamiento = artefacto.get("fecha_entrenamiento", "desconocida")
+            metricas = artefacto.get("metricas", {})
+        else:
+            self.modelo = artefacto
+            self.variables = ["Year", "Platform", "Genre", "Publisher"]
+            self.umbral = 0.5
+            version_entrenamiento = None
+            fecha_entrenamiento = "desconocida"
+            metricas = {}
         self.logger = logger
 
         # Categorias que el modelo vio al entrenar, para avisar si llega una desconocida
-        encoder = self.modelo.named_steps["preprocesador"].named_transformers_["cat"].named_steps["encoder"]
+        nombre_preprocesador = next(
+            (nombre for nombre in ("preprocesador", "preprocessor") if nombre in self.modelo.named_steps),
+            None,
+        )
+        if nombre_preprocesador is None:
+            raise ValueError("El modelo del .pkl no contiene un paso de preprocesamiento reconocido.")
+        encoder = self.modelo.named_steps[nombre_preprocesador].named_transformers_["cat"].named_steps["encoder"]
         self.categorias_conocidas = {
             columna: set(valores) for columna, valores in zip(["Platform", "Genre", "Publisher"], encoder.categories_)
         }
 
-        if artefacto["sklearn_version"] != sklearn.__version__:
+        if version_entrenamiento and version_entrenamiento != sklearn.__version__:
             logger.warning(
                 "Modelo entrenado con scikit-learn %s y ejecutado con %s: podria haber diferencias.",
-                artefacto["sklearn_version"], sklearn.__version__,
+                version_entrenamiento, sklearn.__version__,
             )
         logger.info(
             "Servicio arrancado en %.0f ms · modelo del %s · metricas en test: %s",
-            (time.perf_counter() - inicio) * 1000, artefacto["fecha_entrenamiento"], artefacto["metricas"],
+            (time.perf_counter() - inicio) * 1000, fecha_entrenamiento, metricas,
         )
 
     def validar(self, peticion: dict[str, Any]) -> tuple[pd.DataFrame, list[str]]:
@@ -167,16 +185,17 @@ class ServicioSuperventas:
         }
 
 
-def modo_ejemplo(servicio: ServicioSuperventas) -> None:
+def modo_ejemplo(servicio: ServicioSuperventas) -> list[dict[str, Any]]:
     """Simula que van llegando peticiones al servicio."""
     respuestas = []
     for peticion in PETICIONES_EJEMPLO:
         respuestas.append(servicio.predecir(peticion))
         time.sleep(0.3)  # tiempo entre peticiones, para que se vea el flujo
     mostrar_resumen(respuestas)
+    return respuestas
 
 
-def modo_lotes(servicio: ServicioSuperventas, ruta_csv: Path) -> None:
+def modo_lotes(servicio: ServicioSuperventas, ruta_csv: Path) -> list[dict[str, Any]]:
     """Predice todos los juegos de un CSV y guarda el resultado."""
     peticiones = pd.read_csv(ruta_csv).to_dict(orient="records")
     respuestas = [servicio.predecir(p) for p in peticiones]
@@ -184,12 +203,14 @@ def modo_lotes(servicio: ServicioSuperventas, ruta_csv: Path) -> None:
     pd.DataFrame(respuestas).to_csv(salida, index=False)
     mostrar_resumen(respuestas)
     print(f"Resultados guardados en: {salida}")
+    return respuestas
 
 
-def modo_interactivo(servicio: ServicioSuperventas) -> None:
+def modo_interactivo(servicio: ServicioSuperventas) -> list[dict[str, Any]]:
     """Pide los datos de un juego por teclado hasta que se pulsa Enter sin escribir nada."""
     print("\nEscribe los datos del juego (Enter vacío en 'Nombre' para salir).")
     print("Géneros válidos:", ", ".join(sorted(servicio.categorias_conocidas["Genre"])))
+    respuestas = []
     while True:
         nombre = input("\nNombre: ").strip()
         if not nombre:
@@ -202,9 +223,11 @@ def modo_interactivo(servicio: ServicioSuperventas) -> None:
             "Publisher": input("Editora (ej. Nintendo, Activision, Ubisoft): ").strip(),
         }
         respuesta = servicio.predecir(peticion)
+        respuestas.append(respuesta)
         if respuesta["estado"] == "ok":
             barra = "█" * round(respuesta["probabilidad"] * 20)
             print(f"→ {respuesta['prediccion']} · {respuesta['probabilidad']:.0%} {barra}")
+    return respuestas
 
 
 def mostrar_resumen(respuestas: list[dict[str, Any]]) -> None:
@@ -217,12 +240,155 @@ def mostrar_resumen(respuestas: list[dict[str, Any]]) -> None:
           f"con error: {(tabla['estado'] == 'error').sum()} · log: {RUTA_LOG}")
 
 
+def mostrar_grafica(respuestas: list[dict[str, Any]], ruta_salida: Path) -> None:
+    """Muestra dos graficas con las predicciones y guarda una copia HTML."""
+    try:
+        import plotly.express as px
+        from plotly.subplots import make_subplots
+    except ImportError:
+        raise SystemExit("Para las graficas instala Plotly: python -m pip install plotly")
+
+    tabla = pd.DataFrame(respuestas)
+    correctas = tabla[tabla["estado"] == "ok"].copy()
+    if correctas.empty:
+        print("\nNo hay predicciones validas para representar.")
+        return
+
+    correctas["probabilidad_porcentaje"] = correctas["probabilidad"] * 100
+    figura_barras = px.bar(
+        correctas,
+        x="probabilidad_porcentaje",
+        y="Name",
+        orientation="h",
+        color="prediccion",
+        text=correctas["probabilidad_porcentaje"].round(1).astype(str) + "%",
+        labels={
+            "probabilidad_porcentaje": "Probabilidad (%)",
+            "Name": "Juego",
+        },
+    )
+
+    conteo = correctas["prediccion"].value_counts().reset_index()
+    conteo.columns = ["prediccion", "juegos"]
+    figura_tarta = px.pie(
+        conteo,
+        names="prediccion",
+        values="juegos",
+        hole=0.45,
+    )
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.65, 0.35],
+        specs=[[{"type": "xy"}, {"type": "domain"}]],
+        subplot_titles=("Probabilidad de superventas por juego", "Distribucion de las predicciones"),
+    )
+    for traza in figura_barras.data:
+        fig.add_trace(traza, row=1, col=1)
+    for traza in figura_tarta.data:
+        fig.add_trace(traza, row=1, col=2)
+
+    fig.update_xaxes(title_text="Probabilidad (%)", range=[0, 100], row=1, col=1)
+    fig.update_yaxes(title_text="Juego", row=1, col=1)
+    fig.update_layout(
+        template="plotly_white",
+        title="Predicciones del modelo de superventas",
+        height=600,
+        showlegend=True,
+    )
+    fig.write_html(ruta_salida, include_plotlyjs="cdn")
+    print(f"\nGrafica guardada en: {ruta_salida}")
+    fig.show()
+
+
+def modo_evaluacion(servicio: ServicioSuperventas, ruta_csv: Path) -> None:
+    """Carga el modelo y muestra las tasas de superventas por genero y plataforma."""
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+
+    if not ruta_csv.is_file():
+        raise FileNotFoundError(f"No se encontro el CSV de evaluacion: {ruta_csv}")
+    df = pd.read_csv(ruta_csv)
+    columnas = [*servicio.variables, "Global_Sales"]
+    faltan = [columna for columna in columnas if columna not in df.columns]
+    if faltan:
+        raise ValueError(f"Faltan columnas necesarias en {ruta_csv.name}: {faltan}")
+
+    df = df.dropna(subset=["Genre", "Platform"]).copy()
+    df["superventas"] = (df["Global_Sales"] >= 1).astype(int)
+    por_genero = (
+        df.groupby("Genre")
+        .agg(juegos=("Name", "size"), tasa_superventas=("superventas", "mean"))
+        .sort_values("tasa_superventas")
+        .reset_index()
+    )
+    por_plataforma = (
+        df.groupby("Platform")
+        .agg(juegos=("Name", "size"), tasa_superventas=("superventas", "mean"))
+        .query("juegos >= 100")
+        .sort_values("tasa_superventas")
+        .reset_index()
+    )
+    if por_genero.empty or por_plataforma.empty:
+        raise ValueError("No hay suficientes datos para calcular las tasas por genero y plataforma.")
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.4, 0.6],
+        specs=[[{"type": "xy"}, {"type": "xy"}]],
+        subplot_titles=("Porcentaje de superventas por género", "Porcentaje de superventas por plataforma"),
+    )
+    for tabla, categoria, col in (
+        (por_genero, "Genre", 1),
+        (por_plataforma, "Platform", 2),
+    ):
+        fig.add_trace(
+            go.Bar(
+                x=tabla["tasa_superventas"],
+                y=tabla[categoria],
+                orientation="h",
+                marker_color="#2a78d6",
+                text=tabla["tasa_superventas"],
+                texttemplate="%{text:.1%}",
+                textposition="outside",
+                customdata=tabla[["juegos"]],
+                cliponaxis=False,
+                showlegend=False,
+                hovertemplate=(
+                    "%{y}<br>Superventas: %{x:.1%}<br>"
+                    "Juegos: %{customdata[0]:,}<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=col,
+        )
+    fig.update_layout(
+        title="Porcentaje de superventas por género y plataforma",
+        template="plotly_white",
+        height=600,
+        width=1200,
+        showlegend=False,
+    )
+    fig.update_xaxes(title_text="% de superventas", tickformat=".0%", row=1, col=1)
+    fig.update_xaxes(title_text="% de superventas", tickformat=".0%", row=1, col=2)
+    fig.update_yaxes(title_text="Género", row=1, col=1)
+    fig.update_yaxes(title_text="Plataforma", row=1, col=2)
+    ruta_salida = CARPETA / "evaluacion_modelo.html"
+    fig.write_html(ruta_salida, include_plotlyjs="cdn")
+    print(f"Graficas guardadas en: {ruta_salida}")
+    fig.show()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Simulacion de produccion del modelo de superventas")
     grupo = parser.add_mutually_exclusive_group()
     grupo.add_argument("--interactivo", action="store_true", help="Introducir los datos por teclado")
     grupo.add_argument("--entrada", type=Path, help="CSV con los juegos a predecir")
+    grupo.add_argument("--evaluar", action="store_true", help="Cargar el .pkl y mostrar las dos primeras graficas del EDA")
     parser.add_argument("--modelo", type=Path, default=RUTA_MODELO, help="Ruta del .pkl")
+    parser.add_argument("--graficas", action="store_true", help="Mostrar dos graficas de las predicciones")
     args = parser.parse_args()
 
     logger = configurar_log()
@@ -232,12 +398,19 @@ def main() -> None:
         logger.error(str(error))
         raise SystemExit(1)
 
-    if args.interactivo:
-        modo_interactivo(servicio)
+    if args.evaluar:
+        modo_evaluacion(servicio, CARPETA / "vgsales.csv")
+    elif args.interactivo:
+        respuestas = modo_interactivo(servicio)
+        ruta_grafica = CARPETA / "predicciones_interactivas.html"
     elif args.entrada:
-        modo_lotes(servicio, args.entrada)
+        respuestas = modo_lotes(servicio, args.entrada)
+        ruta_grafica = args.entrada.with_name(args.entrada.stem + "_graficas.html")
     else:
-        modo_ejemplo(servicio)
+        respuestas = modo_ejemplo(servicio)
+        ruta_grafica = CARPETA / "predicciones_ejemplo.html"
+    if args.graficas and not args.evaluar:
+        mostrar_grafica(respuestas, ruta_grafica)
     logger.info("Servicio detenido.")
 
 
